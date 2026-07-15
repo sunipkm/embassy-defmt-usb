@@ -1,6 +1,6 @@
 [package]
 name = "embassy-defmt-usb"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 description = "Generic defmt USB CDC-ACM drain transport for embassy"
 authors = ["Sunip K. Mukherjee <sunipkmukherjee@gmail.com>"]

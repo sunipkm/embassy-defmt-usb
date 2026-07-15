@@ -46,11 +46,18 @@
 #![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use core::{cell::UnsafeCell, sync::atomic::{AtomicUsize, Ordering}};
+use core::{
+    cell::UnsafeCell,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 use embassy_time::{Duration, Timer};
-use embassy_usb::{Builder, Handler, types::StringIndex};
+use embassy_usb::control::{InResponse, OutResponse, Recipient, Request, RequestType};
 use embassy_usb::driver::{Driver, Endpoint, EndpointError, EndpointIn};
+use embassy_usb::{
+    Builder, Handler,
+    types::{InterfaceNumber, StringIndex},
+};
 use portable_atomic::AtomicBool;
 use static_cell::StaticCell;
 
@@ -74,12 +81,21 @@ struct LogBuffer {
 
 impl LogBuffer {
     const fn new() -> Self {
-        Self { state: BufState::Active, cursor: 0, data: [0u8; USB_BUF_SIZE] }
+        Self {
+            state: BufState::Active,
+            cursor: 0,
+            data: [0u8; USB_BUF_SIZE],
+        }
     }
 
-    fn set_flushing(&mut self) { self.state = BufState::Flush; }
+    fn set_flushing(&mut self) {
+        self.state = BufState::Flush;
+    }
 
-    fn reset(&mut self) { self.state = BufState::Active; self.cursor = 0; }
+    fn reset(&mut self) {
+        self.state = BufState::Active;
+        self.cursor = 0;
+    }
 
     fn write(&mut self, bytes: &[u8]) {
         let c = self.cursor;
@@ -91,7 +107,9 @@ impl LogBuffer {
         (self.cursor + n) < USB_BUF_SIZE && self.state == BufState::Active
     }
 
-    fn is_flushing(&self) -> bool { self.state == BufState::Flush }
+    fn is_flushing(&self) -> bool {
+        self.state == BufState::Flush
+    }
 }
 
 struct Controller {
@@ -117,7 +135,9 @@ impl Controller {
         }
     }
 
-    fn enable(&self)  { self.enabled.store(true,  Ordering::Relaxed); }
+    fn enable(&self) {
+        self.enabled.store(true, Ordering::Relaxed);
+    }
 
     fn disable(&self) {
         self.enabled.store(false, Ordering::Relaxed);
@@ -130,7 +150,9 @@ impl Controller {
 
     /// # Safety: must be called from within a critical section.
     pub(crate) unsafe fn swap(&self) {
-        if !self.enabled.load(Ordering::Relaxed) { return; }
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
         let idx = self.current_idx.load(Ordering::Relaxed);
         // SAFETY: inside a critical section, no concurrent mutation.
         unsafe { (*self.buffers[idx].get()).set_flushing() };
@@ -139,8 +161,10 @@ impl Controller {
 
     /// # Safety: must be called from within a critical section.
     pub(crate) unsafe fn write(&self, bytes: &[u8]) {
-        if !self.enabled.load(Ordering::Relaxed) { return; }
-        let idx   = self.current_idx.load(Ordering::Relaxed);
+        if !self.enabled.load(Ordering::Relaxed) {
+            return;
+        }
+        let idx = self.current_idx.load(Ordering::Relaxed);
         let other = idx ^ 1;
         // SAFETY: inside critical section.
         let cur = unsafe { &mut *self.buffers[idx].get() };
@@ -150,7 +174,9 @@ impl Controller {
             cur.write(bytes);
         } else {
             unsafe { self.swap() };
-            if oth.accepts(bytes.len()) { oth.write(bytes); }
+            if oth.accepts(bytes.len()) {
+                oth.write(bytes);
+            }
         }
     }
 
@@ -159,7 +185,9 @@ impl Controller {
             // SAFETY: the drain loop is the only reader, and only reads
             // buffers in Flush state — disjoint from concurrent writes.
             let buf = unsafe { &*cell.get() };
-            if buf.is_flushing() { return Some((i, buf)); }
+            if buf.is_flushing() {
+                return Some((i, buf));
+            }
         }
         None
     }
@@ -207,11 +235,48 @@ pub unsafe fn swap() {
 
 struct DefmtStringHandler {
     defmt_str: StringIndex,
+    /// Comm interface number — used to filter CDC class requests.
+    comm_if: InterfaceNumber,
+    /// Default line coding returned to GET_LINE_CODING (9600 8N1).
+    line_coding: [u8; 7],
 }
 
 impl Handler for DefmtStringHandler {
     fn get_string(&mut self, index: StringIndex, _lang_id: u16) -> Option<&str> {
         (index == self.defmt_str).then_some("defmt")
+    }
+
+    /// Accept SET_LINE_CODING and SET_CONTROL_LINE_STATE so Windows does not
+    /// receive a STALL when opening the defmt COM port (error 31).
+    fn control_out(&mut self, req: Request, _data: &[u8]) -> Option<OutResponse> {
+        if req.request_type != RequestType::Class
+            || req.recipient != Recipient::Interface
+            || req.index != self.comm_if.0 as u16
+        {
+            return None;
+        }
+        match req.request {
+            0x20 | 0x22 => Some(OutResponse::Accepted), // SET_LINE_CODING | SET_CONTROL_LINE_STATE
+            _ => None,
+        }
+    }
+
+    /// Return default line coding for GET_LINE_CODING.
+    fn control_in<'a>(&'a mut self, req: Request, buf: &'a mut [u8]) -> Option<InResponse<'a>> {
+        if req.request_type != RequestType::Class
+            || req.recipient != Recipient::Interface
+            || req.index != self.comm_if.0 as u16
+        {
+            return None;
+        }
+        if req.request == 0x21 {
+            // GET_LINE_CODING
+            let n = buf.len().min(self.line_coding.len());
+            buf[..n].copy_from_slice(&self.line_coding[..n]);
+            Some(InResponse::Accepted(&buf[..n]))
+        } else {
+            None
+        }
     }
 }
 
@@ -241,13 +306,17 @@ pub struct UsbDefmtLogger {
 }
 
 impl Default for UsbDefmtLogger {
-    fn default() -> Self { Self::new() }
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UsbDefmtLogger {
     /// Create with the default drain poll interval (10 ms).
     pub const fn new() -> Self {
-        Self { timeout: Duration::from_millis(10) }
+        Self {
+            timeout: Duration::from_millis(10),
+        }
     }
 
     /// Override the idle poll interval between drain attempts.
@@ -269,11 +338,11 @@ impl UsbDefmtLogger {
     {
         static DEFMT_STRING_HANDLER: StaticCell<DefmtStringHandler> = StaticCell::new();
 
-        let (ep_in, defmt_str) = {
+        let (ep_in, defmt_str, comm_if) = {
             let mut func = builder.function(0x02, 0x02, 0x00);
 
             // Comm interface: carries the "defmt" iInterface string.
-            let defmt_str = {
+            let (defmt_str, comm_if) = {
                 let mut comm = func.interface();
                 let str_idx = comm.string();
                 let num = comm.interface_number();
@@ -286,7 +355,7 @@ impl UsbDefmtLogger {
                 alt.descriptor(0x24, &[0x06, num.0, num.0 + 1]);
                 // Notification endpoint (required by spec; not used for defmt).
                 alt.endpoint_interrupt_in(None, 8, 255);
-                str_idx
+                (str_idx, num)
             };
 
             // Data interface: the bulk IN endpoint is the defmt byte stream.
@@ -297,13 +366,21 @@ impl UsbDefmtLogger {
                 alt.endpoint_bulk_in(None, 64)
             };
 
-            (ep_in, defmt_str)
+            (ep_in, defmt_str, comm_if)
         };
 
-        let handler = DEFMT_STRING_HANDLER.init(DefmtStringHandler { defmt_str });
+        let handler = DEFMT_STRING_HANDLER.init(DefmtStringHandler {
+            defmt_str,
+            comm_if,
+            // Default line coding: 9600 baud, 1 stop bit, no parity, 8 data bits.
+            line_coding: [0x80, 0x25, 0x00, 0x00, 0x00, 0x00, 0x08],
+        });
         builder.handler(handler);
 
-        UsbDefmtTask { timeout: self.timeout, sender: ep_in }
+        UsbDefmtTask {
+            timeout: self.timeout,
+            sender: ep_in,
+        }
     }
 }
 
@@ -360,7 +437,10 @@ where
                         last_was_max = chunk.len() == max;
                         match sender.write(chunk).await {
                             Ok(()) => {}
-                            Err(e) => { write_err = Some(e); break; }
+                            Err(e) => {
+                                write_err = Some(e);
+                                break;
+                            }
                         }
                     }
 
