@@ -7,7 +7,7 @@ Generic [defmt] USB CDC-ACM drain transport for [embassy], compatible with any
 
 | Feature | Default | Description |
 |---|---|---|
-| `global-logger` | off | Registers a `defmt::global_logger` that writes frames to **both** SEGGER RTT and the USB double-buffer.  Cortex-M / probe-rs targets. |
+| `global-logger` | off | Registers a `#[defmt::global_logger]` that writes every frame to both SEGGER RTT and the USB double-buffer. Suitable for Cortex-M targets debugged via probe-rs / OpenOCD. When disabled, bring your own `#[defmt::global_logger]` and call [`write()`] / [`swap()`] from within it. |
 
 Without `global-logger` you bring your own `#[defmt::global_logger]` and call
 the provided hooks from within it (see [Manual logger](#manual-logger) below).
@@ -20,7 +20,7 @@ the provided hooks from within it (see [Manual logger](#manual-logger) below).
 embassy-defmt-usb = { version = "0.0.1", features = ["global-logger"] }
 ```
 
-The `#[defmt::global_logger]` is registered automatically.  All you need is
+The `#[defmt::global_logger]` is registered automatically. All you need is
 the USB wiring in your main task:
 
 ```rust
@@ -94,15 +94,15 @@ port easily identifiable to host tools such as `defmt-print` and `probe-rs`.
 
 | Function | Safety | Description |
 |---|---|---|
-| `write(bytes: &[u8])` | Must be in a defmt critical section | Write COBS-encoded bytes to the USB double-buffer |
-| `swap()` | Must be in a defmt critical section | Swap active/flush buffers at end-of-frame |
+| `write(bytes: &[u8])` | Must be in a `defmt` critical section | Write COBS-encoded bytes to the USB double-buffer |
+| `swap()` | Must be in a `defmt` critical section | Swap active/flush buffers at end-of-frame |
 
 ## Compatibility
 
 Tested with `embassy-usb 0.6` and `embassy-executor 0.9` on:
 - `embassy-rp` (RP2040 / RP2350)
 
-Should work with any `D: embassy_usb::driver::Driver<'static>` implementation.
+This crate should work with any `D: embassy_usb::driver::Driver<'static>` implementation.
 
 [defmt]: https://defmt.ferrous-systems.com
 [embassy]: https://embassy.dev
