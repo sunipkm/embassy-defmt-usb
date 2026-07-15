@@ -1,0 +1,29 @@
+[package]
+name = "embassy-defmt-usb"
+version = "0.0.1"
+edition = "2024"
+description = "Generic defmt USB CDC-ACM drain transport for embassy"
+authors = ["Sunip K. Mukherjee <sunipkmukherjee@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/sunipkm/embassy-defmt-usb"
+
+[package.metadata.docs.rs]
+# Build with every feature enabled so all feature-gated items appear in the docs.
+all-features = true
+# Pass `--cfg docsrs` so `#[cfg_attr(docsrs, doc(cfg(...)))]` gates activate.
+rustdoc-args = ["--cfg", "docsrs"]
+
+[features]
+## Registers a `defmt::global_logger` that writes to **both** SEGGER RTT and the
+## USB double-buffer.  Suitable for Cortex-M targets with probe-rs / OpenOCD.
+## When this feature is disabled you must define your own global logger and call
+## `embassy_defmt_usb::write` / `swap` from within it.
+global-logger = ["dep:defmt"]
+
+[dependencies]
+embassy-usb = { version = "0.6" }
+embassy-time = { version = "0.5" }
+static_cell = "2.1"
+portable-atomic = { version = "1.13", features = ["critical-section"] }
+critical-section = "1.1"
+defmt = { version = "1.0", optional = true }
